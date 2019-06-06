@@ -19,6 +19,7 @@
 #ifndef SML_TRANSPORT_H_
 #define	SML_TRANSPORT_H_
 
+#include <unistd.h>
 #include <stdlib.h>
 #include <sml/sml_file.h>
 
@@ -43,6 +44,16 @@ void sml_transport_listen(int fd, void (*sml_transport_receiver)(unsigned char *
 // error.
 // The sml_file must be free'd elsewhere.
 int sml_transport_write(int fd, sml_file *file);
+
+
+struct sml_transport_state_t {
+    uint8_t buf[4];
+    int cnt;
+    bool esc;
+    bool start;
+    uint16_t crc16;
+};
+ssize_t sml_transport_stream_read( struct sml_transport_state_t* s, const uint8_t* buffer_in, size_t in_len, uint8_t* buffer_out, size_t max_len);
 
 #ifdef __cplusplus
 }

@@ -17,9 +17,9 @@
 // along with libSML.  If not, see <http://www.gnu.org/licenses/>.
 
 
-#include <sml/sml_transport.h>
-#include <sml/sml_shared.h>
-#include <sml/sml_crc16.h>
+#include "sml/sml_transport.h"
+#include "sml/sml_shared.h"
+#include "sml/sml_crc16.h"
 #include <stdio.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -164,17 +164,6 @@ int sml_transport_write(int fd, sml_file *file) {
 	return 0;
 }
 
-enum State {
-    start = 0,
-    payload = 1,
-};
-
-struct sml_transport_state_t {
-    enum State state;
-    int counter;
-    bool start;
-    bool escape;
-};
 
 /*!
  * \brief sml_transport_stream_read
@@ -188,72 +177,89 @@ struct sml_transport_state_t {
  * \return -1 parameter error
  * \return -2 \c buffer_out too small, discard \c buffer_out and start over with new \c state
  */
-ssize_t sml_transport_stream_read( struct sml_transport_state_t* s, const unsigned char* buffer_in, size_t in_len, unsigned char* buffer_out, size_t max_len)
+ssize_t sml_transport_stream_read( struct sml_transport_state_t* s, const uint8_t* buffer_in, size_t in_len, uint8_t* buffer_out, size_t max_len)
 {
     if (!s || !buffer_in || !buffer_out)
         return -1;
+    if (s->cnt < 0 || s->cnt >= 4)
+        return -1;
 
     size_t pos_in = 0;
+    size_t pos_out = 0;
 
     while (pos_in < in_len) {
-        unsigned char ch = buffer_in[pos_in];
-        switch (s->state) {
-        case start:
-            // search start sequence
-            if ((s->counter < 4 && ch == 0x1b) || (s->counter >= 4 && ch == 0x01))
-                s->counter++;
-            else
-                s->counter = 0;
-            if (s->counter == 8) {
-                s->counter = 0;
-                s->state = payload;
+        uint8_t ch = buffer_in[pos_in++];
+        if (ch == 0x1b || s->esc) {
+            s->buf[s->cnt++] = ch;
+        } else {
+            // no escape char and not in escape mode
+            if (s->start) {
+                // write data to output
+                // first empty buffer
+                if (pos_out + s->cnt + 1 >= max_len)
+                    return -2;
+                for (int i=0; i<s->cnt; i++) {
+                    buffer_out[pos_out++] = s->buf[i];
+                    s->crc16 = sml_crc16_append( s->crc16, s->buf[i] );
+                }
+                buffer_out[pos_out++] = ch;
+                s->crc16 = sml_crc16_append( s->crc16, ch );
             }
-            break;
-        case payload:
-
+            s->cnt = 0;
+        }
+        if (s->cnt == 4) {
+            if (s->esc) {
+                for (int i=0; i<4; i++)
+                    s->crc16 = sml_crc16_append( s->crc16, 0x1b );
+                // escape sequence and escape message complete
+                if (memcmp( s->buf, "\x1b\x1b\x1b\x1b", 4 ) == 0) {
+                    // literal sequence of 4x 0x1b
+                    if (s->start) {
+                        if (pos_out + 4 >= max_len)
+                            return -2;
+                        for (int i=0; i<4; i++) {
+                            buffer_out[pos_out++] = 0x1b;
+                            s->crc16 = sml_crc16_append( s->crc16, 0x1b );
+                        }
+                    } else {
+                        fprintf( stderr, "libsml: error: literal 0x1b1b1b1b without start\n" );
+                    }
+                }
+                else if (memcmp( s->buf, "\x01\x01\x01\x01", 4 ) == 0) {
+                    // message START
+                    s->start = true;
+                    pos_out = 0;
+                    s->crc16 = sml_crc16_init();
+                    for (int i=0; i<4; i++)
+                        s->crc16 = sml_crc16_append( s->crc16, 0x1b );
+                    for (int i=0; i<4; i++)
+                        s->crc16 = sml_crc16_append( s->crc16, 0x01 );
+                }
+                else if (s->buf[0] == 0x1a) {
+                    // message END
+                    if (s->start) {
+                        uint8_t xx = s->buf[1];
+                        uint8_t yy = s->buf[2];
+                        uint8_t zz = s->buf[3];
+                        s->crc16 = sml_crc16_append( s->crc16, 0x1a );
+                        s->crc16 = sml_crc16_append( s->crc16, xx );
+                        s->crc16 = sml_crc16_exit( s->crc16 );
+                        fprintf( stderr, "libsml: crc16 calc: %x   crc16: %x %x", (int)s->crc16, (int)yy, (int)zz );
+                        return pos_out;
+                    } else {
+                        fprintf( stderr, "libsml: error: message end without start\n" );
+                    }
+                }
+                else {
+                    fprintf( stderr, "libsml: error: unrecognized sequence\n" );
+                }
+            }
+            s->esc = !s->esc;
+            s->cnt = 0;
         }
     }
 
-    while (len < 8) {
-        if (sml_read(fd, &readfds, &(buf[len]), 1) == 0) {
-            return 0;
-        }
 
-        if ((buf[len] == 0x1b && len < 4) || (buf[len] == 0x01 && len >= 4)) {
-            len++;
-        }
-        else {
-            len = 0;
-        }
-    }
-
-    // found start sequence
-    while ((len+8) < max_len) {
-        if (sml_read(fd, &readfds, &(buf[len]), 4) == 0) {
-            return 0;
-        }
-
-        if (memcmp(&buf[len], esc_seq, 4) == 0) {
-            // found esc sequence
-            len += 4;
-            if (sml_read(fd, &readfds, &(buf[len]), 4) == 0) {
-                return 0;
-            }
-
-            if (buf[len] == 0x1a) {
-                // found end sequence
-                len += 4;
-                memcpy(buffer, &(buf[0]), len);
-                return len;
-            }
-            else {
-                // don't read other escaped sequences yet
-                fprintf(stderr,"libsml: error: unrecognized sequence\n");
-                return 0;
-            }
-        }
-        len += 4;
-    }
 
     return 0;
 }
