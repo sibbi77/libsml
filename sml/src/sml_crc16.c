@@ -45,15 +45,32 @@ static u16 fcstab [256] = { 0x0000, 0x1189, 0x2312, 0x329b, 0x4624, 0x57ad, 0x65
 };
 
 u16 sml_crc16_calculate(unsigned char *cp, int len) {
-	u16 fcs = PPPINITFCS16;
+    u16 fcs = sml_crc16_init();
 	
 	while (len--) {
-		fcs = (fcs >> 8) ^ fcstab[(fcs ^ *cp++) & 0xff];
+        fcs = sml_crc16_append(fcs, *cp++);
 	}
 	
-	fcs ^= 0xffff;
-	fcs = ((fcs & 0xff) << 8) | ((fcs & 0xff00) >> 8);
+    fcs = sml_crc16_exit(fcs);
 
 	return fcs;
+}
+
+u16 sml_crc16_init(void) {
+    return PPPINITFCS16;
+}
+
+
+u16 sml_crc16_append(u16 current_crc16, unsigned char ch) {
+    current_crc16 = (current_crc16 >> 8) ^ fcstab[(current_crc16 ^ ch) & 0xff];
+
+    return current_crc16;
+}
+
+u16 sml_crc16_exit(u16 current_crc16) {
+    current_crc16 ^= 0xffff;
+    current_crc16 = ((current_crc16 & 0xff) << 8) | ((current_crc16 & 0xff00) >> 8);
+
+    return current_crc16;
 }
 

@@ -28,6 +28,10 @@ extern "C" {
 // CRC16 FSC implementation based on DIN 62056-46
 u16 sml_crc16_calculate(unsigned char *cp, int len) ;
 
+u16 sml_crc16_init(void);
+u16 sml_crc16_append(u16 current_crc16, unsigned char ch);
+u16 sml_crc16_exit(u16 current_crc16);
+
 #ifdef __cplusplus
 }
 #endif
