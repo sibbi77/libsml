@@ -163,3 +163,97 @@ int sml_transport_write(int fd, sml_file *file) {
 
 	return 0;
 }
+
+enum State {
+    start = 0,
+    payload = 1,
+};
+
+struct sml_transport_state_t {
+    enum State state;
+    int counter;
+    bool start;
+    bool escape;
+};
+
+/*!
+ * \brief sml_transport_stream_read
+ * \param state opaque object which stores parser state
+ * \param buffer_in input data to parse
+ * \param in_len size of \c buffer_in
+ * \param buffer_out parsed data will be stored here
+ * \param max_len size of \c buffer_out
+ * \return >0 a complete file is available at \c buffer_out with this length
+ * \return 0 need more data
+ * \return -1 parameter error
+ * \return -2 \c buffer_out too small, discard \c buffer_out and start over with new \c state
+ */
+ssize_t sml_transport_stream_read( struct sml_transport_state_t* s, const unsigned char* buffer_in, size_t in_len, unsigned char* buffer_out, size_t max_len)
+{
+    if (!s || !buffer_in || !buffer_out)
+        return -1;
+
+    size_t pos_in = 0;
+
+    while (pos_in < in_len) {
+        unsigned char ch = buffer_in[pos_in];
+        switch (s->state) {
+        case start:
+            // search start sequence
+            if ((s->counter < 4 && ch == 0x1b) || (s->counter >= 4 && ch == 0x01))
+                s->counter++;
+            else
+                s->counter = 0;
+            if (s->counter == 8) {
+                s->counter = 0;
+                s->state = payload;
+            }
+            break;
+        case payload:
+
+        }
+    }
+
+    while (len < 8) {
+        if (sml_read(fd, &readfds, &(buf[len]), 1) == 0) {
+            return 0;
+        }
+
+        if ((buf[len] == 0x1b && len < 4) || (buf[len] == 0x01 && len >= 4)) {
+            len++;
+        }
+        else {
+            len = 0;
+        }
+    }
+
+    // found start sequence
+    while ((len+8) < max_len) {
+        if (sml_read(fd, &readfds, &(buf[len]), 4) == 0) {
+            return 0;
+        }
+
+        if (memcmp(&buf[len], esc_seq, 4) == 0) {
+            // found esc sequence
+            len += 4;
+            if (sml_read(fd, &readfds, &(buf[len]), 4) == 0) {
+                return 0;
+            }
+
+            if (buf[len] == 0x1a) {
+                // found end sequence
+                len += 4;
+                memcpy(buffer, &(buf[0]), len);
+                return len;
+            }
+            else {
+                // don't read other escaped sequences yet
+                fprintf(stderr,"libsml: error: unrecognized sequence\n");
+                return 0;
+            }
+        }
+        len += 4;
+    }
+
+    return 0;
+}
